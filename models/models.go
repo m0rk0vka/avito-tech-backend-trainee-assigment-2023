@@ -10,8 +10,7 @@ type Segments struct {
 	Name string `json:"name"`
 }
 
-type Relations struct {
-	ID        int64 `json:"id"`
-	UserID    int64 `json:"user_id"`
-	SegmentID int64 `json:"segment_id"`
+type Update struct {
+	SegmentsToAdd    []string `json:"segments_to_add"`
+	SegmentsToDelete []string `json:"segments_to_delete"`
 }
