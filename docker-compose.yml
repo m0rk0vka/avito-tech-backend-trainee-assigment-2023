@@ -1,0 +1,35 @@
+version: '3.1'
+
+services:
+
+  avito_service:
+    image: avito_service:latest
+    environment:
+      POSTGRES_URL: "postgres://avito_service:abacaba@avito_db:5432/avito_service_db?sslmode=disable"
+    ports:
+    - 8080:8080
+    networks:
+    - avitonet
+
+  avito_db:
+    image: postgres:14.3
+    restart: always
+    container_name: avito_postgres
+    environment:
+      POSTGRES_PASSWORD: abacaba
+      POSTGRES_USER: avito_service
+      POSTGRES_DB: avito_service_db
+    volumes:
+    - "postgres_data:/var/lib/postgresql/data"
+    ports:
+    - 5432:5432
+    networks: 
+    - avitonet
+
+networks:
+  avitonet:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    external: false
