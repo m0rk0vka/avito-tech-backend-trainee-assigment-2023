@@ -7,10 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 	"github.com/m0rk0vka/avito-tech-backend-trainee-assigment-2023/models"
 )
@@ -72,53 +70,55 @@ func insertSegment(segment models.Segments) int64 {
 }
 
 func DeleteSegment(w http.ResponseWriter, r *http.Request) {
-	params := mux.Vars(r)
+	var segment models.Segments
 
-	id, err := strconv.Atoi(params["id"])
+	err := json.NewDecoder(r.Body).Decode(&segment)
 	if err != nil {
-		log.Fatalf("Unable to convert id. %v", err)
+		log.Fatalf("Unable to decode request body")
 	}
 
-	deletedRows := deleteSegmentFromRelations(int64(id))
+	segment.ID, err = getSegmentIDByName(segment.Name)
+	if err != nil {
+		log.Fatalf("Unable to get segment id. %v", err)
+	}
+
+	sqlStatement := `DELETE FROM relations WHERE segment_id=$1`
+	deletedRows := deleteSegmentFromTableByID(int64(segment.ID), sqlStatement)
 	msg := fmt.Sprintf("Successifully deleted relations. Total rows/records %v.", deletedRows)
 
-	deletedRows = deleteSegmentFromSegment(int64(id))
+	sqlStatement = `DELETE FROM relations WHERE segment_id=$1`
+	deletedRows += deleteSegmentFromTableByID(int64(segment.ID), sqlStatement)
 	msg = fmt.Sprintf(msg, "Successifully deleted segment. Total rows/records %v.", deletedRows)
 
 	res := response{
-		ID:      int64(id),
+		ID:      int64(segment.ID),
 		Message: msg,
 	}
 
 	json.NewEncoder(w).Encode(res)
 }
 
-func deleteSegmentFromSegment(id int64) int64 {
+func getSegmentIDByName(name string) (int64, error) {
 	db := createConnection()
 	defer db.Close()
 
-	sqlStatement := `DELETE FROM segments WHERE id=$1`
+	sqlStatement := `SELECT id FROM segments WHERE name=$1`
 
-	res, err := db.Exec(sqlStatement, id)
-	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
+	var id int64
+
+	if err := db.QueryRow(sqlStatement, name).Scan(&id); err != nil {
+		if err != sql.ErrNoRows {
+			return int64(0), fmt.Errorf("Can't find segment with name %s", name)
+		}
+		return int64(0), fmt.Errorf("Can't find segment with name %s. %v", name, err)
 	}
 
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		log.Fatalf("Error while checking affected rows. %v", err)
-	}
-
-	fmt.Printf("Total rows/records affected %v.", rowsAffected)
-
-	return rowsAffected
+	return id, nil
 }
 
-func deleteSegmentFromRelations(id int64) int64 {
+func deleteSegmentFromTableByID(id int64, sqlStatement string) int64 {
 	db := createConnection()
 	defer db.Close()
-
-	sqlStatement := `DELETE FROM relations WHERE segment_id=$1`
 
 	res, err := db.Exec(sqlStatement, id)
 	if err != nil {
@@ -136,33 +136,35 @@ func deleteSegmentFromRelations(id int64) int64 {
 }
 
 func UpdateUser(w http.ResponseWriter, r *http.Request) {
-	params := mux.Vars(r)
-
-	id, err := strconv.Atoi(params["id"])
-	if err != nil {
-		log.Fatalf("Unable to convert id. %v", err)
-	}
-
 	var update models.Update
 
-	err = json.NewDecoder(r.Body).Decode(&update)
+	err := json.NewDecoder(r.Body).Decode(&update)
 	if err != nil {
 		log.Fatalf("Unable to decode request body. %v", err)
 	}
 
-	updatedRows := updateUser(int64(id), update)
+	isUser, err := isUser(update.UserID)
+	if err != nil {
+		log.Fatalf("Unable to check existing user. %v", err)
+	}
+
+	if !isUser {
+		insertUser(update.UserID)
+	}
+
+	updatedRows := updateRelations(update)
 
 	msg := fmt.Sprintf("Successifully updated user segments. Total rows/records affected %v", updatedRows)
 
 	res := response{
-		ID:      int64(id),
+		ID:      int64(update.UserID),
 		Message: msg,
 	}
 
 	json.NewEncoder(w).Encode(res)
 }
 
-func updateUser(id int64, update models.Update) int64 {
+func updateRelations(update models.Update) int64 {
 	db := createConnection()
 	defer db.Close()
 
@@ -170,10 +172,10 @@ func updateUser(id int64, update models.Update) int64 {
 
 	sqlDelete := `DELETE FROM relations WHERE segment_id=(SELECT segments.id FROM segments WHERE segments.name=$1)`
 
-	allRowsAffected := int64(0)
+	allRowsAffected := int64(1)
 
 	for _, upd := range update.SegmentsToAdd {
-		res, err := db.Exec(sqlUpdate, id, upd)
+		res, err := db.Exec(sqlUpdate, update.UserID, upd)
 		if err != nil {
 			log.Fatalf("Unable to execute the query. %v", err)
 		}
@@ -187,7 +189,7 @@ func updateUser(id int64, update models.Update) int64 {
 	}
 
 	for _, dlt := range update.SegmentsToDelete {
-		res, err := db.Exec(sqlDelete, id, dlt)
+		res, err := db.Exec(sqlDelete, dlt)
 		if err != nil {
 			log.Fatalf("Unable to execute the query. %v", err)
 		}
@@ -200,26 +202,57 @@ func updateUser(id int64, update models.Update) int64 {
 		allRowsAffected += rowsAffected
 	}
 
-	fmt.Println("Total rows/records affected %v", allRowsAffected)
+	fmt.Printf("Total rows/records affected %d", allRowsAffected)
 
 	return allRowsAffected
 }
 
-func GetUserByID(w http.ResponseWriter, r *http.Request) {
-	params := mux.Vars(r)
+func isUser(id int64) (bool, error) {
+	db := createConnection()
+	defer db.Close()
 
-	id, err := strconv.Atoi(params["id"])
-	if err != nil {
-		log.Fatalf("Unable to convert id. %v", err)
+	sqlStatement := `SELECT EXISTS (SELECT * FROM users WHERE id=$1)`
+
+	var exists bool
+
+	if err := db.QueryRow(sqlStatement, id).Scan(&exists); err != nil {
+		if err != sql.ErrNoRows {
+			return false, fmt.Errorf("Smth with query %v", err)
+		}
 	}
 
-	segments, err := getSegmentsByUser(int64(id))
+	return exists, nil
+}
+
+func insertUser(id int64) {
+	db := createConnection()
+	defer db.Close()
+
+	sqlStatement := `INSERT INTO users(id) VALUES($1)`
+
+	_, err := db.Exec(sqlStatement, id)
+	if err != nil {
+		log.Fatalf("Unable to execute the query (insert into users). %v", err)
+	}
+
+	fmt.Printf("Inserted single record %v.", id)
+}
+
+func GetUserSegments(w http.ResponseWriter, r *http.Request) {
+	var user models.Users
+
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		log.Fatalf("Unable to decoe request body. %v", err)
+	}
+
+	segments, err := getSegmentsByUser(int64(user.ID))
 	if err != nil {
 		log.Fatalf("Unable to get user segments. %v", err)
 	}
 
 	res := response{
-		ID:      int64(id),
+		ID:      int64(user.ID),
 		Message: strings.Join(segments, ","),
 	}
 
@@ -243,7 +276,7 @@ func getSegmentsByUser(id int64) ([]string, error) {
 	for rows.Next() {
 		var seg models.Segments
 		if err := rows.Scan(&seg.ID, &seg.Name); err != nil {
-			fmt.Println("Unable to scan the row. %v", err)
+			fmt.Printf("Unable to scan the row. %v", err)
 			return segments, err
 		}
 
