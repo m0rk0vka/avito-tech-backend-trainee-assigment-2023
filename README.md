@@ -7,7 +7,7 @@ docker build . -t avito_service:latest
 docker-compose up -d --force-recreate
 ```
 Запуск sql-скрипта для создания таблиц:  
-![Image](https://github.com/m0rk0vka/images/raw/main/avito-service.drawio.png)
+![Image](https://github.com/m0rk0vka/images/raw/main/avito-service/tables.drawio.png)
 ```
 psql -U avito_service -d avito_service_db -W < avito_service_db.sql
 ```
