@@ -197,20 +197,19 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Unable to check existing user. %v", err)
 	}
 
-	if !isUser {
-		insertUser(update.UserID)
-	}
-
 	statusCode := http.StatusBadRequest
 
 	msg := fmt.Sprintf("Bad request. Check all segments are exists or all segments you want to remove are related to user")
 
-	var updatedRows int64
+	if checkInputSegments(update) {
+		// if input is valide then create user if it is not exists
+		if !isUser {
+			insertUser(update.UserID)
+		}
 
-	check := checkInputSegments(update)
+		updatedRows := updateRelations(update)
 
-	if check {
-		updatedRows = updateRelations(update)
+		statusCode = http.StatusOK
 
 		msg = fmt.Sprintf("Successifully updated user segments. Total rows/records affected %v", updatedRows)
 	}
@@ -221,16 +220,57 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 		Message: msg,
 	}
 
+	log.Println(res)
+
 	w.WriteHeader(statusCode)
 
 	json.NewEncoder(w).Encode(res)
 }
 
-func checkInputSegments(models.Update) bool {
+func checkInputSegments(update models.Update) bool {
 	db := createConnection()
 	defer db.Close()
 
-	return false
+	isSegment := `SELECT EXISTS (SELECT * FROM segments WHERE name=$1)`
+
+	isUser := `SELECT EXISTS (SELECT * FROM relations WHERE user_id=$1 AND segment_id=$2)`
+
+	for _, upd := range update.SegmentsToAdd {
+		var exists bool
+
+		if err := db.QueryRow(isSegment, upd).Scan(&exists); err != nil {
+			log.Fatalf("Unable to scan the row.\n %v", err)
+		}
+
+		if !exists {
+			return false
+		}
+	}
+
+	for _, dlt := range update.SegmentsToDelete {
+		var exists bool
+
+		segment_id, code := getSegmentIDByName(dlt)
+
+		switch code {
+		case http.StatusInternalServerError:
+			log.Fatalln("Unable to scan the row")
+		case http.StatusBadRequest:
+			return false
+		case http.StatusOK:
+
+		}
+
+		if err := db.QueryRow(isUser, update.UserID, segment_id).Scan(&exists); err != nil {
+			log.Fatalf("Unable to scan the row.\n %v", err)
+		}
+
+		if !exists {
+			return false
+		}
+	}
+
+	return true
 }
 
 func updateRelations(update models.Update) int64 {
@@ -270,8 +310,6 @@ func updateRelations(update models.Update) int64 {
 
 		allRowsAffected += rowsAffected
 	}
-
-	fmt.Printf("Total rows/records affected %d", allRowsAffected)
 
 	return allRowsAffected
 }
