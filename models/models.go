@@ -1,8 +1,7 @@
 package models
 
 type Users struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID int64 `json:"id"`
 }
 
 type Segments struct {

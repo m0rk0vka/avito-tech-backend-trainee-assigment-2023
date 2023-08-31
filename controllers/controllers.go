@@ -212,15 +212,19 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	statusCode := http.StatusBadRequest
 
-	msg := fmt.Sprintf("Bad request. Check all segments are exists or all segments you want to remove are related to user")
+	msg := fmt.Sprintf("Bad request. Check all segments are exists/all segments you want to remove are related to user/mb you want to add segment which user already had")
 
 	if checkInputSegments(update) {
 		// if input is valide then create user if it is not exists
+		updatedRows := int64(0)
+
 		if !isUser {
 			insertUser(update.UserID)
+
+			updatedRows += int64(1)
 		}
 
-		updatedRows := updateRelations(update)
+		updatedRows += updateRelations(update)
 
 		statusCode = http.StatusOK
 
@@ -251,7 +255,7 @@ func checkInputSegments(update models.Update) bool {
 	isSegment := `SELECT EXISTS (SELECT * FROM segments WHERE name=$1)`
 
 	isUser := `SELECT EXISTS (SELECT * FROM relations WHERE user_id=$1 AND segment_id=$2)`
-
+	//check here does segment exist and does user has not segment to add already
 	for _, upd := range update.SegmentsToAdd {
 		var exists bool
 
@@ -262,8 +266,27 @@ func checkInputSegments(update models.Update) bool {
 		if !exists {
 			return false
 		}
-	}
 
+		segment_id, code := getSegmentIDByName(upd)
+
+		switch code {
+		case http.StatusInternalServerError:
+			log.Fatalln("Unable to scan the row")
+		case http.StatusBadRequest:
+			return false
+		case http.StatusOK:
+
+		}
+
+		if err := db.QueryRow(isUser, update.UserID, segment_id).Scan(&exists); err != nil {
+			log.Fatalf("Unable to scan the row.\n %v", err)
+		}
+
+		if exists {
+			return false
+		}
+	}
+	//check here does user has segment to delete
 	for _, dlt := range update.SegmentsToDelete {
 		var exists bool
 
@@ -296,9 +319,9 @@ func updateRelations(update models.Update) int64 {
 
 	sqlUpdate := `INSERT INTO relations(user_id, segment_id) SELECT $1, segments.id FROM segments WHERE segments.name=$2`
 
-	sqlDelete := `DELETE FROM relations WHERE segment_id=(SELECT segments.id FROM segments WHERE segments.name=$1)`
+	sqlDelete := `DELETE FROM relations WHERE segment_id=(SELECT segments.id FROM segments WHERE segments.name=$1) AND user_id=$2`
 
-	allRowsAffected := int64(1)
+	allRowsAffected := int64(0)
 
 	for _, upd := range update.SegmentsToAdd {
 		res, err := db.Exec(sqlUpdate, update.UserID, upd)
@@ -315,7 +338,7 @@ func updateRelations(update models.Update) int64 {
 	}
 
 	for _, dlt := range update.SegmentsToDelete {
-		res, err := db.Exec(sqlDelete, dlt)
+		res, err := db.Exec(sqlDelete, dlt, update.UserID)
 		if err != nil {
 			log.Fatalf("Unable to execute the query. %v", err)
 		}
@@ -368,15 +391,36 @@ func GetUserSegments(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Unable to decoe request body. %v", err)
 	}
 
-	segments, err := getSegmentsByUser(int64(user.ID))
+	isUser, err := isUser(user.ID)
 	if err != nil {
-		log.Fatalf("Unable to get user segments. %v", err)
+		log.Fatalf("Unable to check existing user. %v", err)
+	}
+
+	var (
+		segments []string
+		msg      string
+	)
+
+	if !isUser {
+		insertUser(user.ID)
+
+		msg = "This user has no segments"
+	} else {
+		segments, err = getSegmentsByUser(int64(user.ID))
+		if err != nil {
+			log.Fatalf("Unable to get user segments. %v", err)
+		}
+
+		msg = strings.Join(segments, ",")
+		if msg == "" {
+			msg = "This user has no segments"
+		}
 	}
 
 	res := response{
 		Time:    time.Now(),
 		Code:    http.StatusOK,
-		Message: strings.Join(segments, ","),
+		Message: msg,
 	}
 
 	out, err := json.Marshal(&res)
@@ -392,7 +436,7 @@ func getSegmentsByUser(id int64) ([]string, error) {
 	db := createConnection()
 	defer db.Close()
 
-	sqlStatement := `SELECT T1.segment_id, T2.name FROM relations AS T1 LEFT JOIN segments AS T2 ON T1.segment_id=T2.id AND T1.user_id=$1`
+	sqlStatement := `SELECT T2.name FROM relations AS T1 INNER JOIN segments AS T2 ON T1.segment_id=T2.id AND T1.user_id=$1`
 
 	rows, err := db.Query(sqlStatement, id)
 	if err != nil {
@@ -403,12 +447,12 @@ func getSegmentsByUser(id int64) ([]string, error) {
 	var segments []string
 
 	for rows.Next() {
-		var seg models.Segments
-		if err := rows.Scan(&seg.ID, &seg.Name); err != nil {
+		var segment_name string
+		if err := rows.Scan(&segment_name); err != nil {
 			return segments, fmt.Errorf("Unable to scan the row.\n %v", err)
 		}
 
-		segments = append(segments, seg.Name)
+		segments = append(segments, segment_name)
 	}
 
 	if err = rows.Err(); err != nil {
