@@ -33,11 +33,15 @@ func createConnection() *sql.DB {
 
 	res := response{
 		Time:    time.Now(),
-		Code:    http.StatusOK,
 		Message: "Successifully connected to postgres",
 	}
 
-	log.Println(res)
+	out, err := json.Marshal(&res)
+	if err != nil {
+		log.Fatalf("Unable to marshal res.\n %v", err)
+	}
+
+	log.Println(string(out))
 
 	return db
 }
@@ -69,7 +73,12 @@ func CreateSegment(w http.ResponseWriter, r *http.Request) {
 		Message: msg,
 	}
 
-	log.Println(res)
+	out, err := json.Marshal(&res)
+	if err != nil {
+		log.Fatalf("Unable to marshal response.\n %v", err)
+	}
+
+	log.Println(string(out))
 
 	w.WriteHeader(statusCode)
 
@@ -142,7 +151,11 @@ func DeleteSegment(w http.ResponseWriter, r *http.Request) {
 		Message: msg,
 	}
 
-	log.Println(res)
+	out, err := json.Marshal(&res)
+	if err != nil {
+		log.Fatalf("Unable to marshal response.\n %v", err)
+	}
+	log.Println(string(out))
 
 	w.WriteHeader(statusCode)
 
@@ -220,7 +233,11 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 		Message: msg,
 	}
 
-	log.Println(res)
+	out, err := json.Marshal(&res)
+	if err != nil {
+		log.Fatalf("Unable to marshal response.\n %v", err)
+	}
+	log.Println(string(out))
 
 	w.WriteHeader(statusCode)
 
@@ -362,7 +379,11 @@ func GetUserSegments(w http.ResponseWriter, r *http.Request) {
 		Message: strings.Join(segments, ","),
 	}
 
-	log.Println(res)
+	out, err := json.Marshal(&res)
+	if err != nil {
+		log.Fatalf("Unable to marshal response.\n %v", err)
+	}
+	log.Println(string(out))
 
 	json.NewEncoder(w).Encode(res)
 }
