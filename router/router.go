@@ -8,10 +8,10 @@ import (
 func Router() *mux.Router {
 	router := mux.NewRouter()
 
-	router.HandleFunc("/api/users/{id}", controllers.GetUserByID).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/getusersegments", controllers.GetUserSegments).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/createsegment", controllers.CreateSegment).Methods("POST", "OPTIONS")
-	router.HandleFunc("/api/users/{id}", controllers.UpdateUser).Methods("PUT", "OPTIONS")
-	router.HandleFunc("/api/deletesegment/{id}", controllers.DeleteSegment).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/updateusersegments", controllers.UpdateUser).Methods("PUT", "OPTIONS")
+	router.HandleFunc("/api/deletesegment", controllers.DeleteSegment).Methods("DELETE", "OPTIONS")
 
 	return router
 }
