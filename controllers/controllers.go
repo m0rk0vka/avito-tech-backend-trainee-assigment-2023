@@ -8,28 +8,36 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/m0rk0vka/avito-tech-backend-trainee-assigment-2023/models"
 )
 
 type response struct {
-	ID      int64  `json:"id,omitempty"`
-	Message string `json:"message,omitempty"`
+	Time    time.Time `json:"time,omitempty"`
+	Code    int       `json:"code,omitempty"`
+	Message string    `json:"message,omitempty"`
 }
 
 func createConnection() *sql.DB {
 	db, err := sql.Open("postgres", os.Getenv("POSTGRES_URL"))
 	if err != nil {
-		panic(err)
+		log.Fatalf("Unable to open connection to db.\n %v", err)
 	}
 
 	err = db.Ping()
 	if err != nil {
-		panic(err)
+		log.Fatalf("Unable to ping db.\n %v", err)
 	}
 
-	fmt.Println("Successifully connected postgres")
+	res := response{
+		Time:    time.Now(),
+		Code:    http.StatusOK,
+		Message: "Successifully connected to postgres",
+	}
+
+	log.Println(res)
 
 	return db
 }
@@ -42,31 +50,60 @@ func CreateSegment(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Unable to decode request body. %v", err)
 	}
 
-	insertID := insertSegment(segment)
-	res := response{
-		ID:      insertID,
-		Message: "Segment created successifully",
+	var msg string
+
+	insertID, statusCode := insertSegment(segment)
+
+	switch statusCode {
+	case http.StatusCreated:
+		msg = fmt.Sprintf("Segment with id %d created successifully", insertID)
+	case http.StatusBadRequest:
+		msg = fmt.Sprintf("Segment with name %s already exists.", segment.Name)
+	case http.StatusInternalServerError:
+		msg = fmt.Sprintf("Unable to scan the row")
 	}
+
+	res := response{
+		Time:    time.Now(),
+		Code:    statusCode,
+		Message: msg,
+	}
+
+	log.Println(res)
+
+	w.WriteHeader(statusCode)
 
 	json.NewEncoder(w).Encode(res)
 }
 
-func insertSegment(segment models.Segments) int64 {
+func insertSegment(segment models.Segments) (int64, int) {
 	db := createConnection()
 	defer db.Close()
 
-	sqlStatement := `INSERT INTO segments(name) VALUES($1) RETURNING id`
+	sqlStatement := `SELECT EXISTS (SELECT * FROM segments WHERE name=$1)`
+
+	var exists bool
+
+	if err := db.QueryRow(sqlStatement, segment.Name).Scan(&exists); err != nil {
+		log.Fatalf("Unable to scan the row. %v", err)
+		return 0, http.StatusInternalServerError
+	}
+
+	if exists {
+		return 0, http.StatusBadRequest
+	}
+
+	sqlStatement = `INSERT INTO segments(name) VALUES($1) RETURNING id`
 
 	var id int64
 
 	err := db.QueryRow(sqlStatement, segment.Name).Scan(&id)
 	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
+		log.Fatalf("Unable to scan the row. %v", err)
+		return 0, http.StatusInternalServerError
 	}
 
-	fmt.Println("Inserted single record %v.", id)
-
-	return id
+	return id, http.StatusCreated
 }
 
 func DeleteSegment(w http.ResponseWriter, r *http.Request) {
@@ -77,28 +114,42 @@ func DeleteSegment(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Unable to decode request body")
 	}
 
-	segment.ID, err = getSegmentIDByName(segment.Name)
-	if err != nil {
-		log.Fatalf("Unable to get segment id. %v", err)
+	var (
+		statusCode int
+		msg        string
+	)
+
+	segment.ID, statusCode = getSegmentIDByName(segment.Name)
+	switch statusCode {
+	case http.StatusOK:
+
+		sqlStatement := `DELETE FROM relations WHERE segment_id=$1`
+		deletedRows := deleteSegmentFromTableByID(int64(segment.ID), sqlStatement)
+
+		sqlStatement = `DELETE FROM segments WHERE id=$1`
+		deletedRows += deleteSegmentFromTableByID(int64(segment.ID), sqlStatement)
+
+		msg = fmt.Sprintf("Successifully deleted segment. Total rows/records affected %d.", deletedRows)
+	case http.StatusInternalServerError:
+		msg = fmt.Sprintf("Unable to scan the row")
+	case http.StatusNotFound:
+		msg = fmt.Sprintf("No sigment with name %s.", segment.Name)
 	}
-
-	sqlStatement := `DELETE FROM relations WHERE segment_id=$1`
-	deletedRows := deleteSegmentFromTableByID(int64(segment.ID), sqlStatement)
-	msg := fmt.Sprintf("Successifully deleted relations. Total rows/records %v.", deletedRows)
-
-	sqlStatement = `DELETE FROM relations WHERE segment_id=$1`
-	deletedRows += deleteSegmentFromTableByID(int64(segment.ID), sqlStatement)
-	msg = fmt.Sprintf(msg, "Successifully deleted segment. Total rows/records %v.", deletedRows)
 
 	res := response{
-		ID:      int64(segment.ID),
+		Time:    time.Now(),
+		Code:    statusCode,
 		Message: msg,
 	}
+
+	log.Println(res)
+
+	w.WriteHeader(statusCode)
 
 	json.NewEncoder(w).Encode(res)
 }
 
-func getSegmentIDByName(name string) (int64, error) {
+func getSegmentIDByName(name string) (int64, int) {
 	db := createConnection()
 	defer db.Close()
 
@@ -107,13 +158,13 @@ func getSegmentIDByName(name string) (int64, error) {
 	var id int64
 
 	if err := db.QueryRow(sqlStatement, name).Scan(&id); err != nil {
-		if err != sql.ErrNoRows {
-			return int64(0), fmt.Errorf("Can't find segment with name %s", name)
+		if err == sql.ErrNoRows {
+			return 0, http.StatusNotFound
 		}
-		return int64(0), fmt.Errorf("Can't find segment with name %s. %v", name, err)
+		return 0, http.StatusInternalServerError
 	}
 
-	return id, nil
+	return id, http.StatusOK
 }
 
 func deleteSegmentFromTableByID(id int64, sqlStatement string) int64 {
@@ -129,8 +180,6 @@ func deleteSegmentFromTableByID(id int64, sqlStatement string) int64 {
 	if err != nil {
 		log.Fatalf("Error while checking affected rows. %v", err)
 	}
-
-	fmt.Printf("Total rows/records affected %v.", rowsAffected)
 
 	return rowsAffected
 }
@@ -152,16 +201,36 @@ func UpdateUser(w http.ResponseWriter, r *http.Request) {
 		insertUser(update.UserID)
 	}
 
-	updatedRows := updateRelations(update)
+	statusCode := http.StatusBadRequest
 
-	msg := fmt.Sprintf("Successifully updated user segments. Total rows/records affected %v", updatedRows)
+	msg := fmt.Sprintf("Bad request. Check all segments are exists or all segments you want to remove are related to user")
+
+	var updatedRows int64
+
+	check := checkInputSegments(update)
+
+	if check {
+		updatedRows = updateRelations(update)
+
+		msg = fmt.Sprintf("Successifully updated user segments. Total rows/records affected %v", updatedRows)
+	}
 
 	res := response{
-		ID:      int64(update.UserID),
+		Time:    time.Now(),
+		Code:    statusCode,
 		Message: msg,
 	}
 
+	w.WriteHeader(statusCode)
+
 	json.NewEncoder(w).Encode(res)
+}
+
+func checkInputSegments(models.Update) bool {
+	db := createConnection()
+	defer db.Close()
+
+	return false
 }
 
 func updateRelations(update models.Update) int64 {
@@ -216,9 +285,7 @@ func isUser(id int64) (bool, error) {
 	var exists bool
 
 	if err := db.QueryRow(sqlStatement, id).Scan(&exists); err != nil {
-		if err != sql.ErrNoRows {
-			return false, fmt.Errorf("Smth with query %v", err)
-		}
+		return false, fmt.Errorf("Unable to scan the row.\n %v", err)
 	}
 
 	return exists, nil
@@ -235,7 +302,7 @@ func insertUser(id int64) {
 		log.Fatalf("Unable to execute the query (insert into users). %v", err)
 	}
 
-	fmt.Printf("Inserted single record %v.", id)
+	log.Printf("Inserted single record %v.", id)
 }
 
 func GetUserSegments(w http.ResponseWriter, r *http.Request) {
@@ -252,9 +319,12 @@ func GetUserSegments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res := response{
-		ID:      int64(user.ID),
+		Time:    time.Now(),
+		Code:    http.StatusOK,
 		Message: strings.Join(segments, ","),
 	}
+
+	log.Println(res)
 
 	json.NewEncoder(w).Encode(res)
 }
@@ -267,7 +337,7 @@ func getSegmentsByUser(id int64) ([]string, error) {
 
 	rows, err := db.Query(sqlStatement, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Unable to exec the query.\n %v", err)
 	}
 	defer rows.Close()
 
@@ -276,8 +346,7 @@ func getSegmentsByUser(id int64) ([]string, error) {
 	for rows.Next() {
 		var seg models.Segments
 		if err := rows.Scan(&seg.ID, &seg.Name); err != nil {
-			fmt.Printf("Unable to scan the row. %v", err)
-			return segments, err
+			return segments, fmt.Errorf("Unable to scan the row.\n %v", err)
 		}
 
 		segments = append(segments, seg.Name)
@@ -286,8 +355,6 @@ func getSegmentsByUser(id int64) ([]string, error) {
 	if err = rows.Err(); err != nil {
 		return segments, err
 	}
-
-	fmt.Println("Successifully got user segments.")
 
 	return segments, nil
 }
