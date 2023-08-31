@@ -13,4 +13,5 @@ type Segments struct {
 type Update struct {
 	SegmentsToAdd    []string `json:"segments_to_add"`
 	SegmentsToDelete []string `json:"segments_to_delete"`
+	UserID           int64    `json:"user_id"`
 }
