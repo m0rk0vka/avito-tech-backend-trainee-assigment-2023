@@ -5,18 +5,16 @@ DROP TABLE users;
 
 CREATE TABLE users (
 	id INT UNIQUE NOT NULL,
-	username VARCHAR(20) NOT NULL,
 	PRIMARY KEY (id)
 );
 
 CREATE TABLE segments (
-	id INT UNIQUE NOT NULL,
-	name VARCHAR(20) NOT NULL,
-	PRIMARY KEY (id)
+	id SERIAL PRIMARY KEY,
+	name VARCHAR(20) NOT NULL
 );
 
 CREATE TABLE relations (
-	id INT UNIQUE NOT NULL,
+	id SERIAL PRIMARY KEY,
 	user_id INT NOT NULL,
 	segment_id INT NOT NULL,
 	FOREIGN KEY (user_id) REFERENCES users(id),
